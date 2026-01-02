@@ -6,7 +6,14 @@ const db = require("./db");
 
 const app = express();
 
-app.use(cors());
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
+
 app.use(express.json());
 
 app.get("/", (req, res) => {
@@ -24,43 +31,38 @@ app.post("/register", async (req, res) => {
     return res.status(400).json({ message: "All fields are required" });
   }
 
-  try {
-    const checkQuery = "SELECT id FROM users WHERE email = ?";
+  const checkQuery = "SELECT id FROM users WHERE email = ?";
 
-    db.query(checkQuery, [email], async (err, results) => {
-      if (err) return res.status(500).json({ message: "Database error" });
+  db.query(checkQuery, [email], async (err, results) => {
+    if (err) return res.status(500).json({ message: "Database error" });
 
-      if (results.length > 0) {
-        return res.status(409).json({ message: "Email already registered" });
+    if (results.length > 0) {
+      return res.status(409).json({ message: "Email already registered" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const insertQuery = `
+      INSERT INTO users (first_name, last_name, email, phone, password)
+      VALUES (?, ?, ?, ?, ?)
+    `;
+
+    db.query(
+      insertQuery,
+      [first_name, last_name, email, phone, hashedPassword],
+      (err, result) => {
+        if (err) return res.status(500).json({ message: "Database error" });
+
+        res.status(201).json({
+          message: "User registered successfully",
+          userId: result.insertId,
+        });
       }
-
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      const insertQuery = `
-        INSERT INTO users 
-        (first_name, last_name, email, phone, password)
-        VALUES (?, ?, ?, ?, ?)
-      `;
-
-      db.query(
-        insertQuery,
-        [first_name, last_name, email, phone, hashedPassword],
-        (err, result) => {
-          if (err) return res.status(500).json({ message: "Database error" });
-
-          return res.status(201).json({
-            message: "User registered successfully",
-            userId: result.insertId,
-          });
-        }
-      );
-    });
-  } catch {
-    return res.status(500).json({ message: "Server error" });
-  }
+    );
+  });
 });
 
-app.post("/login", (req, res) => {
+app.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
@@ -77,13 +79,14 @@ app.post("/login", (req, res) => {
     }
 
     const user = results[0];
+
     const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
       return res.status(401).json({ message: "Invalid email or password" });
     }
 
-    return res.json({
+    res.json({
       message: "Login successful",
       user: {
         id: user.id,
@@ -95,7 +98,7 @@ app.post("/login", (req, res) => {
   });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
