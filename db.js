@@ -10,9 +10,9 @@ const db = mysql.createConnection({
 
 db.connect((err) => {
   if (err) {
-    console.error("MySQL connection failed:", err);
+    console.error("MA2TOU3A:", err);
   } else {
-    console.log("MySQL connected");
+    console.log("DAWLE");
   }
 });
 
