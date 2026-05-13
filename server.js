@@ -6,13 +6,27 @@ const db = require("./db");
 
 const app = express();
 
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
-  })
-);
+const allowedOrigins = [
+  "https://deadmansgrill.vercel.app",
+  "https://frontend-deamans-grill-9hletbob1.vercel.app",
+  "https://frontend-deamans-grill.vercel.app"
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // allow requests from browser + tools like Postman
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"],
+};
+
+app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
 
 app.use(express.json());
 
