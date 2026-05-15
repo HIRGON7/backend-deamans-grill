@@ -5,6 +5,7 @@ const bcrypt = require("bcrypt");
 const db = require("./db");
 
 const app = express();
+const pool = db.promise();
 
 /* =========================
    CORS FIX
@@ -16,11 +17,9 @@ const allowedOrigins = [
   "https://frontend-deamans-grill.vercel.app",
 ];
 
-// Manual CORS middleware
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
-  // Allow your Vercel domains + any Vercel preview deployment
   const isAllowed =
     !origin ||
     allowedOrigins.includes(origin) ||
@@ -33,11 +32,8 @@ app.use((req, res, next) => {
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
-  // If frontend sends cookies later, keep this.
   res.setHeader("Access-Control-Allow-Credentials", "true");
 
-  // Handle preflight request
   if (req.method === "OPTIONS") {
     return res.sendStatus(204);
   }
@@ -59,6 +55,26 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
+app.get("/test-db", async (req, res) => {
+  try {
+    const [rows] = await pool.query("SELECT 1 AS test");
+
+    return res.json({
+      success: true,
+      message: "Database connected",
+      rows,
+    });
+  } catch (error) {
+    console.error("DB TEST ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Database connection failed",
+      error: error.message,
+    });
+  }
+});
+
 /* =========================
    REGISTER
    ========================= */
@@ -68,47 +84,43 @@ app.post("/register", async (req, res) => {
     const { first_name, last_name, email, phone, password } = req.body;
 
     if (!first_name || !last_name || !email || !phone || !password) {
-      return res.status(400).json({ message: "All fields are required" });
+      return res.status(400).json({
+        message: "All fields are required",
+      });
     }
 
-    const checkQuery = "SELECT id FROM users WHERE email = ?";
+    const [existingUsers] = await pool.query(
+      "SELECT id FROM users WHERE email = ?",
+      [email]
+    );
 
-    db.query(checkQuery, [email], async (err, results) => {
-      if (err) {
-        console.error("Register check database error:", err);
-        return res.status(500).json({ message: "Database error" });
-      }
+    if (existingUsers.length > 0) {
+      return res.status(409).json({
+        message: "Email already registered",
+      });
+    }
 
-      if (results.length > 0) {
-        return res.status(409).json({ message: "Email already registered" });
-      }
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-      const hashedPassword = await bcrypt.hash(password, 10);
+    const [result] = await pool.query(
+      `
+      INSERT INTO users (first_name, last_name, email, phone, password)
+      VALUES (?, ?, ?, ?, ?)
+      `,
+      [first_name, last_name, email, phone, hashedPassword]
+    );
 
-      const insertQuery = `
-        INSERT INTO users (first_name, last_name, email, phone, password)
-        VALUES (?, ?, ?, ?, ?)
-      `;
-
-      db.query(
-        insertQuery,
-        [first_name, last_name, email, phone, hashedPassword],
-        (err, result) => {
-          if (err) {
-            console.error("Register insert database error:", err);
-            return res.status(500).json({ message: "Database error" });
-          }
-
-          return res.status(201).json({
-            message: "User registered successfully",
-            userId: result.insertId,
-          });
-        }
-      );
+    return res.status(201).json({
+      message: "User registered successfully",
+      userId: result.insertId,
     });
   } catch (error) {
-    console.error("Register server error:", error);
-    return res.status(500).json({ message: "Server error" });
+    console.error("REGISTER ERROR:", error);
+
+    return res.status(500).json({
+      message: "Register database/server error",
+      error: error.message,
+    });
   }
 });
 
@@ -121,42 +133,56 @@ app.post("/login", async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required" });
+      return res.status(400).json({
+        message: "Email and password are required",
+      });
     }
 
-    const query = "SELECT * FROM users WHERE email = ?";
+    const [users] = await pool.query(
+      "SELECT * FROM users WHERE email = ?",
+      [email]
+    );
 
-    db.query(query, [email], async (err, results) => {
-      if (err) {
-        console.error("Login database error:", err);
-        return res.status(500).json({ message: "Database error" });
-      }
-
-      if (results.length === 0) {
-        return res.status(401).json({ message: "Invalid email or password" });
-      }
-
-      const user = results[0];
-
-      const isMatch = await bcrypt.compare(password, user.password);
-
-      if (!isMatch) {
-        return res.status(401).json({ message: "Invalid email or password" });
-      }
-
-      return res.json({
-        message: "Login successful",
-        user: {
-          id: user.id,
-          first_name: user.first_name,
-          last_name: user.last_name,
-          email: user.email,
-        },
+    if (users.length === 0) {
+      return res.status(401).json({
+        message: "Invalid email or password",
       });
+    }
+
+    const user = users[0];
+
+    if (!user.password) {
+      console.error("LOGIN ERROR: User has no password column/value:", user);
+
+      return res.status(500).json({
+        message: "Password is missing in database",
+      });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    if (!isMatch) {
+      return res.status(401).json({
+        message: "Invalid email or password",
+      });
+    }
+
+    return res.json({
+      message: "Login successful",
+      user: {
+        id: user.id,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        email: user.email,
+      },
     });
   } catch (error) {
-    console.error("Login server error:", error);
-    return res.status(500).json({ message: "Server error" });
+    console.error("LOGIN ERROR:", error);
+
+    return res.status(500).json({
+      message: "Login database/server error",
+      error: error.message,
+    });
   }
 });
 
